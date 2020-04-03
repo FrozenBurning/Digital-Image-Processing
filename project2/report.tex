@@ -1,0 +1,272 @@
+\documentclass[UTF8]{ctexart}
+
+\usepackage[linesnumbered,boxed,ruled,commentsnumbered]{algorithm2e}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[bookmarks=true]{hyperref}
+\usepackage{amsmath}
+
+\begin{document}
+\title{数字图像处理综合作业2——指纹特征提取综合算法}
+\author{陈昭熹 2017011552}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{运行说明}
+\subsection{文件结构}
+
+\subsubsection{基础算法类}
+\begin{itemize}
+    \item[OpenProc.m] 自己实现的形态学开运算
+    \item[CloseProc.m] 自己实现的形态学闭运算
+    \item[Erode.m] 自己实现的形态学腐蚀
+    \item[Dilate.m] 自己实现的形态学膨胀   
+    \item[GeodesicDilation.m] 自己实现的测地学膨胀算法 
+\end{itemize}
+
+\subsubsection{各流程功能函数}
+\begin{itemize}
+    \item[RidgeSegmentation.m] 脊线粗分割
+    \item[FillHoles.m] 脊线细分割(填补空洞、平滑毛刺、去除空岛)
+    \item[FeatureDetect.m] 细节点检测
+    \item[NeighborPostProc.m] 基于细节点的邻域形态学算法(去除桥接，优化脊线图)
+    \item[EndValidation.m] 细节点验证
+    \item[ShowFeature.m] 细节点可视化     
+\end{itemize}
+\subsection{使用方法}
+\begin{itemize}
+    \item[entry\_25.m] 处理r2\_5.bmp的入口文件
+    \item[entry\_964.m] 处理r96\_4.bmp的入口文件
+\end{itemize}
+
+
+\section{算法流程与实现}
+
+\subsection{算法框架}
+\begin{algorithm}[H]
+    \caption{指纹特征提取综合算法}
+    \KwIn{I - Enhanced fingerprint Image}
+    \KwOut{$feature$ - fingerprint Image contains feature points }
+    \If{I not $empty$}
+    {
+        $ bin\_I \leftarrow $imbinarize($I$)\\
+        $ segment \leftarrow $RidgeSegmentation($bin\_I$)\\
+        $thined \leftarrow$ bwmorph('thin',$segment$)\\
+        $feature \leftarrow$ FeatureDetect($thined$)\\
+        $feature \leftarrow$ Validation($feature$)
+    }
+\end{algorithm}
+
+
+\subsection{脊线分割}
+脊线分割主要分为两步，即\textbf{粗分割和细分割}。
+
+粗分割主要通过形态学闭运算来去除二值化图像中的桥接，生成尽可能处于正确脊线位置的图像，在利用原二值化图像作为mask,闭运算之后的图像作为marker进行测地学膨胀，从而达到去除空岛的目的。其原理为，由于闭运算能够将较多的非脊线像素去除，且结构元素设置的比较aggressive，这使得留下来的部分一定是原图中较为明显的脊线特征(连续且宽度足够),这样一来使用这样的图像作为种子来在原图的mask上做测地学膨胀就可以将闭运算中被腐蚀的脊线还原为原来的宽度和长度，而由于空岛与脊线的拓扑不连通性，就不会将空岛恢复出来。由于算法比较过程比较简单，只需要调用本文实现的形态学算法即可，算法流程伪代码在此不做展示。
+
+细分割则通过3x3的小邻域遍历粗分割图像，通过邻域内的像素和以及相应阈值来判断该区域是否是空洞或者是毛刺，从而完成填补空洞，并移除部分毛刺的功能。具体算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{细分割算法}
+    \KwIn{I - rough segmentation}
+    \KwOut{R - filted segmentation}
+    \For{each $3 \times 3$  $region$ in I}
+    {
+        \If{$region$(2,2) == 1}
+        {
+            \If{sum($region) \leq 4$}
+            {
+                $region$(2,2) $\leftarrow 0$ 
+            }
+        }
+        \If{$region$(2,2) == 0}
+        {
+            \If{sum($region) \geq 5$}
+            {
+                $region$(2,2) $\leftarrow 1$ 
+            }
+        }
+    }
+\end{algorithm}
+
+
+\subsection{脊线细化}
+脊线细化算法分为两步，\textbf{脊线细化以及基于细节点的邻域形态学算法}。这个步骤可以迭代多次，以达到最好的效果。针对给出的两张图均迭代了两次。
+
+脊线细化按照要求调用库函数，无须赘述。
+
+基于细节点的邻域形态学算法，是本文实现的一种用于去除前一步分割中所难以去除的顽固桥接、毛刺和不合理增强的形态学算法。其基本原理是建立在一个\textbf{假设}上，即指纹脊线的分叉点与端点或者分叉点与分叉点之间的距离不能过近。这也可以说是一个统计学先验知识，几乎没有指纹会呈现出连续两三个像素宽度内出现两个分叉点或者同时出现分叉点和端点的。导致这种情况的只能被认为是图像中的毛刺、桥接或者不合理增强所导致的结果。基于这样的原理，可以使用一张细分割图以及其关键点图，通过一个9x9的邻域搜索算法，寻找细分割图中的关键点。当当前邻域中心像素匹配到分叉点时，观察邻域内是否存在其他细节点(分叉点或端点均可),若出现了则应当视为一个不合理邻域，说明原细分割图中出现了桥接、毛刺或不合理增强。此时选择这两个点作为\textbf{矩形对角线上的两个顶点}，对原细分割图的这个小矩形区域进行形态学膨胀，即可消除桥接、毛刺或不合理增强。具体算法流程如下:
+
+\begin{algorithm}[H]
+    \caption{基于细节点的邻域形态学算法}
+    \KwIn{I - filted segmentation, feature - feature points}
+    \KwOut{R - refined segmentation}
+    \For{each $9 \times 9$  $region$ in I}
+    {
+        \If{$region$(5,5) == bifurcation point}
+        {
+            $candidate \leftarrow$ find($region$ == ending point)
+        }
+        \If{$candidate$ is not empty}
+        {
+            Do Dilate in rectangle area between $candidate(1)$ and $region(5,5)$
+        }
+    }
+\end{algorithm}
+
+
+\subsection{细节点检测}
+细节点检测使用作业文档中提示的算法，直接在细化图上进行邻域操作，效果很好，在此不做赘述，只给出流程:
+
+\begin{algorithm}[H]
+    \caption{细节点检测算法}
+    \KwIn{I - thined fingerprint}
+    \KwOut{feature - sparse Image contains feature points}
+    \For{each $3 \times 3$  $region$ in I}
+    {
+        \If{$region$(2,2) == 0}
+        {
+            $CrossNum \leftarrow \frac{1}{2} \Sigma|f(p_{(i+1)mod8})-f(p_i)|$ \\
+
+            \If{CrossNum == 1}
+            {
+                feature at $region(2,2) \leftarrow 0$ //ending point\\  
+            }
+            \If{CrossNum == 3}
+            {
+                feature at $region(2,2) \leftarrow 128$ //bifurcation point
+            }
+        }
+    }
+\end{algorithm}
+
+
+\subsection{细节点验证}
+值得注意的是，传统的细节点验证算法需要考虑边缘的非端点以及内部的一些错误细节点。但在本文的实现过程中，指纹区域内部的错误细节点均已经通过基于细节点的邻域形态学算法予以过滤和清除，\textbf{因此本环节不需要考虑指纹区域内部，只需要着重去除边缘的端点即可}。
+细节点验证算法的原理基于一个先验知识——边缘的端点其周围至少存在一侧的像素均为白色，这巧妙地利用了给定的增强图在非指纹区域都是白色填充的特点。细节点验证只需要进行一个稀疏的大邻域搜索，在每一个端点处取31x31邻域内的所有像素并求和，其小于特定阈值的时候则判定为边缘的端点，直接将其置为背景即可。算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{细节点验证算法}
+    \KwIn{I - segmentation, feature - sparse feature points}
+    \KwOut{newfeature - Validated feature}
+    \For{each $31 \times 31$  $region$ in I}
+    {
+        \If{feature at $region$(16,16) == 0} //ending point
+        {
+            \If{sum(region) < threshold}
+            {
+                feature at $region(16,16) \leftarrow 255$ //non-feature point
+            }
+        }
+    }
+\end{algorithm}
+
+
+\section{中间过程及结果}
+
+\subsection{r96\_4.bmp}
+
+\subsubsection{关键流程节点}
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.4]{964seg.png}
+    \caption{r96\_4.bmp 脊线分割结果}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.4]{964thin.png}
+    \caption{r96\_4.bmp 脊线细化结果}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.6]{964detect.png}
+    \includegraphics[scale=0.6]{964valid.png}
+    \caption{r96\_4.bmp 细节点检测(左) vs 细节点验证(右)}
+\end{figure}
+
+\subsubsection{部分算法细节}
+这里可以注意到，直接对原始增强图进行二值化会产生空洞、毛刺和不当桥接。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.4]{964seg_raw.png}
+    \includegraphics[scale=0.4]{964seg_detail.png}
+    \caption{r96\_4.bmp 二值化后原始分割图像}
+\end{figure}
+
+在使用了细分割算法之后，效果如下所示，图中较为明显的绿框所在的三个明显瑕疵被去除。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.35]{964seg_detail.png}
+    \includegraphics[scale=0.35]{964afterfillholes.png}
+    \caption{r96\_4.bmp 填充空洞、滤除毛刺效果 before vs after}
+\end{figure}
+
+由于细分割算法仍不能去除一些顽固的桥接、毛刺以及原增强图中存在不合理的增强，会导致细化图产生如下左所示的奇怪特征，这可以通过基于细节点的邻域形态学算法进行去除和优化。图中显示了该算法迭代一次和两次细化图的变化。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.2]{964neighborproc.png}
+    \caption{r96\_4.bmp 基于细节点的邻域形态学算法——同时去除原图和细节图中的桥接、毛刺}
+\end{figure}
+
+\subsection{r2\_5.bmp}
+\subsubsection{关键流程节点}
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.4]{25seg.png}
+    \caption{r2\_5.bmp 脊线分割结果}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.4]{25thin.png}
+    \caption{r2\_5.bmp 脊线细化结果}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.6]{25detect.png}
+    \includegraphics[scale=0.6]{25valid.png}
+    \caption{r2\_5.bmp 细节点检测(左) vs 细节点验证(右)}
+\end{figure}
+
+\subsubsection{部分算法细节}
+与上一张图片一样，直接二值化后的图像如下左所示存在空洞、空岛和毛刺。值得注意的是，图中的\textbf{蓝色框所示区域}非常有意思，它在原图中是一个良好恢复出的空岛特征，理论上是不应该使用算法去填充的，否则会让原有指纹图像减少两个特征，这在刑侦上是极为不利的。而本文结合所实现的细分割算法和基于细节点的邻域形态学算法能够较好的保留关键细节，同时去除不该有的元素。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.35]{25seg_detail1.png}
+    \includegraphics[scale=0.35]{25afterfillholes1.png}
+    \caption{r2\_5.bmp 填充空洞、去除空岛、平滑毛刺效果1 before vs after}
+\end{figure}
+
+下图可见，蓝色框区域在原图中是一个明显的双分叉点形成的空岛结构，此前咨询冯老师也反馈道这虽然不普遍，但也是在指纹中会常出现的一种现象，而这种特征一旦保留下来将对应用中的刑侦大为有帮助，因此不能将其与其他空岛等量齐观。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.6]{25fillholes_rawimg.png}
+    \caption{r2\_5.bmp 鲁棒分割算法，合理保留原图细节}
+\end{figure}
+
+下图是一些较为困难的情形，也可以很好的work。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.35]{25seg_detail2.png}
+    \includegraphics[scale=0.35]{25afterfillholes2.png}
+    \caption{r2\_5.bmp 填充空洞、去除空岛、平滑毛刺效果2 before vs after}
+\end{figure}
+
+下图展示了本文实现的基于细节点的邻域形态学算法的强大能力。在一些较为狭窄的区域(图中脊线之间仅有一个pixel距离)，直接使用腐蚀、膨胀、开闭运算等方法会必然导致桥接，而使用本文算法则可以较好的将图像优化，得出正确的特征结果。
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.22]{25neighborproc.png}
+    \caption{r2\_5.bmp 基于细节点的邻域形态学算法——去除桥接: 脊线图变化}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.22]{25neighborproc_thin.png}
+    \caption{r2\_5.bmp 基于细节点的邻域形态学算法——去除桥接：细化图变化}
+\end{figure}
+\end{document}

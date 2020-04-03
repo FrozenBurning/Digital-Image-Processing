@@ -1,0 +1,297 @@
+\documentclass[UTF8]{ctexart}
+
+\usepackage[linesnumbered,boxed,ruled,commentsnumbered]{algorithm2e}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[bookmarks=true]{hyperref}
+\usepackage{amsmath}
+
+\begin{document}
+\title{数字图像处理大作业一——指纹脊线增强}
+\author{陈昭熹 2017011552}
+\maketitle
+
+\section{运行说明}
+\subsection{文件结构}
+
+\begin{itemize}
+    \item[Foreground\_and\_LocalFreq.m] 前景分割与局部频率图
+    \item[LocalOrientation.m] 局部方向图
+    \item[notch\_filter.m] 理想陷波滤波器
+    \item[Gabor\_Filter.m] Gabor滤波器
+    \item[ShowOrientation.m] 方向图可视化函数
+    \item[normalization.m] 归一化函数 
+    \item[seperated\_into\_blocks.m] 图片分割函数，将原图分割为若干个32x32的邻域
+    \item[remove\_dotted\_bg.m] 去除斑点背景函数（仅对图片3.bmp使用）
+    \item[preproc\_3.m] 预处理（仅对图片3.bmp使用）
+\end{itemize}
+
+
+\subsection{使用方法}
+\begin{itemize}
+    \item[entry\_3.m] 处理3.bmp的入口文件
+    \item[entry\_232.m] 处理23\_2.bmp的入口文件
+    \item[entry\_778.m] 处理77\_8.bmp的入口文件
+\end{itemize}
+
+\section{算法流程与实现}
+
+\subsection{Outline}
+
+\begin{algorithm}[H]
+    \caption{指纹增强算法}
+    \KwIn{I - Image contains fingerprint}
+    \KwOut{EI - Enhanced fingerprint Image}
+    \If{I not $empty$}
+    {
+        preproc(I)\\
+        blocks ← seperate(I)\\
+        maskI ← Foreground(blocks)\\
+        F ← LocalFreq(blocks)\\
+        O ← LocalOrientation(blocks)\\
+        EI ← NotchFilter(F,O,maskI,blocks)
+    }
+\end{algorithm}
+值得注意的是，算法中处理了三张图——前景图、频率图和方向图，其长宽均为原图的1/8。对于这三张图的处理均\textbf{基于一个先验知识}——在32x32的小邻域内指纹的特征与正弦波类似，因此其频谱上应当有关于频谱中心对称的两个极大值，且这两个极值点不应离中心点过近（与直流分量区别开），也不应与中心点过远（与高频噪声区别开）。在这样的原理指引下派生出三张图的处理算法，后文就不再对此原理进行赘述。
+
+\subsection{预处理}
+由于三张测试图指纹可恢复情况不同，因此对于某些干扰较多的情况需要进行一定的预处理以获得更好的恢复效果。本文仅对图3.bmp进行一定的预处理，以去除背景的散点噪声以及指纹下的黑色背景，尽可能去除其他无关纹样的干扰。
+
+对于图像3.bmp，首先注意到其右半部分有规律的点状背景，这是会对后续方向图计算产生影响的。通过傅里叶变换找到该图频谱一个周期内存在8个明显的分量，通过matlab GUI获得这几个分量坐标后使用陷波阻断滤波器将其滤除，再还原后发现图片的点状背景被成功移除。之后对该使用过高提升滤波来增强边缘，同时去除噪声。利用去噪锐化的图片进行粗分割，计算每一个不重叠的160x160邻域内的均值，并以这个均值作为阈值进行二值化得到预处理之后的图像。
+
+对于图像77\_8.bmp，注意到针对本文实现的理想陷波通过滤波需要将原图尺寸拉伸到700x700效果较好。
+
+\subsection{前景背景分割}
+
+基于前文讲述的先验知识作为原理，频率图提取时对于每一个小邻域首先计算FFT，去除其中的最大值（该值必为直流分量）后，继续向下查找极大值。若找到两个对称的极大值，且满足相应的阈值条件则判断为是指纹图像，将mask对应区域置为真值。
+
+若找到的两个对称点为$p_1,p_2$，对于32x32的邻域其傅里叶变换的中心位于坐标(17,17),则相应的阈值条件定义如下：
+$$\text{偏心距离: } centralgap = \frac{p_1+p_2}{2}-(17,17)$$
+$$\text{单臂欧式距离: } arm = ||p_1-(17,17)||$$
+$$\text{峰值功率： } mag = Intensity(p_1)$$
+这些阈值条件均作为函数的参数实现，可以针对不同场景进行调节来达到更好的效果。
+
+算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{前景背景分割}
+    \KwIn{blocks - blocks of original Image}
+    \KwOut{maskI - logical mask in where true stand for fingerprint region}
+    \For{$each block$ in blocks}
+    {
+        maskI $\leftarrow false$\\
+        $region$ ← |FFT($eachblock$)|\\
+        $Max\{region\} \leftarrow  0$ \\
+        sort(region) in descending\\
+        \While{k < 10}
+        {
+            \If {top-2 points in region is symmetrical about centre}
+            {
+                \If{points are not too far or too close to the centre}
+                {
+                    maskI $\leftarrow true$
+                }
+            }
+            $k \leftarrow k +1$
+        }
+    }
+    LowPassFilter(maskI)
+
+\end{algorithm}
+
+
+\subsection{局部频率图提取}
+原理前文已提及，不做赘述。选取出指纹区域的正弦分量极值后，使用两个极值点之间的欧式距离作为当前点的频率值。
+
+算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{局部频率图提取}
+    \KwIn{blocks - blocks of original Image}
+    \KwOut{F - LocalFrequency Map}
+    \For{$each block$ in blocks}
+    {
+        $region$ ← |FFT($eachblock$)|\\
+        $Max\{region\} \leftarrow  0$ \\
+        \While{num of $peak$ $\neq$ 2}
+        {
+            $peak \leftarrow $find $Max\{region\}$
+        }
+        calculate Euclidean distance in $peak$ \\
+        F $\leftarrow$ Euclidean distance
+    }
+    LowPassFilter(F)
+
+\end{algorithm}
+
+\subsection{局部方向图提取}
+原理与前类似，不再赘述。实现过程中通过计算找到的两个极值点连线与水平轴的夹角来定义该邻域的方向图方向。
+
+算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{局部方向图提取}
+    \KwIn{blocks - blocks of original Image}
+    \KwOut{O - LocalOrientation Map}
+    \For{$each block$ in blocks}
+    {
+        $O \leftarrow \pi/2$\\
+        $region$ ← |FFT($eachblock$)|\\
+        $Max\{region\} \leftarrow  0$ \\
+        \While{num of $peak$ $\neq$ 2}
+        {
+            $peak \leftarrow $find $Max\{region\}$
+        }
+        calculate $angle$ towards horizon in $peak$ \\
+        F $\leftarrow$ $angle$
+    }
+    LowPassFilter(O)
+
+\end{algorithm}
+
+\subsection{陷波滤波器滤波}
+按照要求，本文使用陷波滤波器进行滤波。主要的想法是通过设计陷波通过滤波器，让找到的正弦分量通过滤波器，而其余的均滤除，从而达到增强指纹图像的效果。本文实现了两种方法，分别是理想陷波滤波器和Gabor滤波器，效果各有千秋。
+
+\subsubsection{理想陷波滤波器}
+理想陷波滤波器思想较为朴素，利用得到的频率图和方向图来计算出每一个32x32邻域的频谱中正弦分量的两个极值点坐标位置（即对应着需要增强的指纹图样），将\textbf{以这两个坐标位置为中心的3x3的邻域置为1}，作为陷波通过的频率范围，其余的位置均为0。然后将这个滤波器应用到32x32邻域的频谱上进行陷波滤波，从而能够通过傅里叶反变换还原出增强的指纹图像。
+
+值得注意的是，为了获得更好的恢复效果，在恢复最后一步使用了一个小技巧——\textbf{基于重叠的均值平滑}。既然使用了32x32的邻域那么就不要浪费这些信息，滤波后变换回空域就直接将32x32的图线性加到恢复后的图像上，这样一来就可以利用上相邻邻域之间的信息，让指纹图像非常平滑。由于我们的邻域逻辑上是以8x8为中心，因此32的大邻域在滑动过程中会有重叠，如果直接线性叠加的话，重叠部分会因为多加了若干次导致灰度爆炸，呈现出白色。为了解决这个问题，只需要维护一个overlap变量计算图像中每个位置的重叠，每一次进行线性叠加时，对应位置就将overlap+1，这样一来，处理之后将图像除以overlap矩阵就可以还原出极度平滑的指纹图像。其背后的原理就是一个均值滤波，利用了大邻域的重叠信息。
+
+
+算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{理想陷波滤波器}
+    \KwIn{原图I,频率图F,方向图O,前景图maskI}
+    \KwOut{增强指纹图EI}
+    \For{$each block$ in blocks}
+    {
+        $region$ ← FFT($eachblock$)\\
+        $Max\{|region|\} \leftarrow  0$ \\
+
+        $region \leftarrow region * notch\_LowPassFilter(F,O,maskI)$\\
+        EI$\leftarrow EI + iFFT(region)$\\
+        average smoothen EI based on $overlap$
+    }
+\end{algorithm}
+
+\subsubsection{Gabor滤波器}
+这里闹了个笑话。笔者原本并不知道Gabor滤波器属于陷波滤波器(notch filter)，于是就并没有将论文\cite{ref1}中使用Gabor滤波器的过程复现，后经过老师指点再经过频域分析发现Gabor滤波器符合陷波滤波器特点，因此又将这种方法予以实现，正好两种方法做一对比。
+与上一小节中的方法类似，还是取32x32的邻域进行FFT变换，通过得到的频率图和方向图直接调用imgaborfilt来完成滤波过程，由于前面频率图的定义十分巧妙，可以直接作为输入参数使用到imgaborfilt函数中，而方向图只需要将弧度转化为角度即可。
+
+这里也使用了上一小节提到的基于重叠的均值平滑。
+
+注意到与上面一小节不同的是，在滤波之后使用了\textbf{归一化函数}将滤波后的空域图均值设置为0.5，方差设置为1，这是为了平衡原图灰度，避免Gabor滤波的方块效应（如果采用二值化策略，在恢复不好的地方就会出现明显的断层，这一点也在论文中有所提及）。
+
+算法流程如下：
+
+\begin{algorithm}[H]
+    \caption{Gabor滤波器}
+    \KwIn{原图I,频率图F,方向图O,前景图maskI}
+    \KwOut{增强指纹图EI}
+    \For{$each block$ in blocks}
+    {
+        $region$ ← FFT($eachblock$)\\
+        $Max\{|region|\} \leftarrow  0$ \\
+
+        $region \leftarrow Gabor\_Filter(region,F,O*180/\pi)$\\
+        EI$\leftarrow EI + iFFT(region)$\\
+        average smoothen EI based on $overlap$
+    }
+\end{algorithm}
+
+\section{结果及过程}
+值得注意的是，在实际应用过程中，指纹匹配往往是寻找匹配关键点，如脊线分叉和脊线终止这些特征。因此在本文实现过程中，参数调整的原则是让增强后的指纹图像中原有的这些特征点得以正确的增强，并且不会经由算法拟合出原图没有的特征点。但对于脊线的连续性和宽度均匀性则放在次一级的位置进行考虑。尽管如此还是会有不尽如人意的地方，比如在对23\_2.bmp增强中极个别脊线会出现轻微错位移动。3.bmp增强中在指纹顶部的部分特征没有还原出来，原图的背景直线影响过大，覆盖了指纹特征，即使肉眼也很难辨认。
+事实上，经过我查阅文献发现，学界常用的指纹增强算法原理有三：基于直方图、基于FFT频域滤波、基于Gabor滤波，本文使用的陷波通过滤波器属于第二种基于FFT的频域滤波，而这三种方法对于同一张图像所产生的误差和错误拟合可以通过文献\cite{ref2}中的一份数据图看出，该图如下所示：
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.25]{falsedetectend.png}
+    \includegraphics[scale=0.25]{falsedetectbifurcation.png}
+    \caption{三种方法脊线终止错误和脊线分叉错误}
+\end{figure}
+
+由图可以看出基于FFT的方法，如本文方法一样是具有局限性的，想要获得更好的增强效果和更少的错误可以使用Gabor滤波的方法。
+
+\subsection{77\_8.bmp}
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.3]{778result.png}
+    \includegraphics[scale=0.3]{778resultGabor.png}
+    \caption{77\_8.bmp增强结果: 理想陷波(左) vs Gabor(右)}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.2]{778threemap.png}
+    \caption{77\_8.bmp 前景、频率图、方向图}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.3]{778unsmoothorientation.png}
+    \includegraphics[scale=0.3]{778smoothorientation.png}
+    \caption{方向图空域显示：平滑前 vs 平滑后}
+\end{figure}
+
+\subsection{23\_2.bmp}
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.3]{232result.png}
+    \includegraphics[scale=0.3]{232resultGabor.png}
+    \caption{23\_2.bmp增强结果: 理想陷波(左) vs Gabor(右)}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.2]{232threemap.png}
+    \caption{23\_2.bmp 前景、频率图、方向图}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.3]{232unsmoothorientation.png}
+    \includegraphics[scale=0.3]{232smoothorientation.png}
+    \caption{方向图空域显示：平滑前 vs 平滑后}
+\end{figure}
+
+
+\subsection{3.bmp}
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.3]{3remove_dots.png}
+    \caption{3.bmp去除点状背景}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.2]{3dotsfft.png}
+    \caption{去除点状背景过程——频谱变化}
+\end{figure}
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.25]{3result.png}
+    \includegraphics[scale=0.25]{3resultGabor.png}
+    \caption{3.bmp增强结果: 理想陷波(左) vs Gabor(右)}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.2]{3threemap.png}
+    \caption{3.bmp 前景、频率图、方向图}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[scale=0.25]{3unsmoothorientation.png}
+    \includegraphics[scale=0.25]{3smoothorientation.png}
+    \caption{方向图空域显示：平滑前 vs 平滑后}
+\end{figure}
+
+\begin{thebibliography}{99}
+    \bibitem{ref1}Lin Hong, Yifei Wan, and Anil K. Jain. "Fingerprint image enhancement: Algorithm and performance evaluation." IEEE Transactions on Pattern Analysis and Machine Intelligence 20.8 (1998): 777-789.
+    \bibitem{ref2} M.Rajinikannan, D.Ashok Kumar,and R.Muthuraj. May 2010. "Estimating the Impact of Fingerprint Enhancement Algorithms for Better Minutia Detection",Internationl Journal of Computer Applications(0975-8887),vol. 2,pp. 36-42
+\end{thebibliography}
+\end{document}
